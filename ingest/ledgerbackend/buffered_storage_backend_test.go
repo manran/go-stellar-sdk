@@ -701,3 +701,69 @@ func TestLedgerBufferRetryLimit(t *testing.T) {
 	assert.ErrorContains(t, err, objectName)
 	assert.ErrorContains(t, err, "transient error")
 }
+
+func TestBSBGetLedgerRawMatchesGetLedger(t *testing.T) {
+	startLedger := uint32(3)
+	endLedger := uint32(5)
+	ctx := context.Background()
+	lcmArray := createLCMForTesting(startLedger, endLedger)
+	bsb := createBufferedStorageBackendForTesting()
+	mockDataStore := createMockdataStore(t, startLedger, endLedger, partitionSize, ledgerPerFileCount)
+	bsb.dataStore = mockDataStore
+
+	require.NoError(t, bsb.PrepareRange(ctx, BoundedRange(startLedger, endLedger)))
+	assert.Eventually(t, func() bool { return len(bsb.ledgerBuffer.ledgerQueue) == 3 }, time.Second*5, time.Millisecond*50)
+
+	raw, err := bsb.GetLedgerRaw(ctx, startLedger)
+	require.NoError(t, err)
+	require.NotEmpty(t, raw)
+	owned := append([]byte(nil), raw...)
+
+	var decoded xdr.LedgerCloseMeta
+	require.NoError(t, xdr.SafeUnmarshal(raw, &decoded))
+	assert.Equal(t, lcmArray[0], decoded)
+
+	legacy, err := bsb.GetLedger(ctx, startLedger)
+	require.NoError(t, err)
+	assert.Equal(t, decoded, legacy)
+
+	nextRaw, err := bsb.GetLedgerRaw(ctx, startLedger+1)
+	require.NoError(t, err)
+	var next xdr.LedgerCloseMeta
+	require.NoError(t, xdr.SafeUnmarshal(nextRaw, &next))
+	assert.Equal(t, lcmArray[1], next)
+
+	var ownedDecoded xdr.LedgerCloseMeta
+	require.NoError(t, xdr.SafeUnmarshal(owned, &ownedDecoded))
+	assert.Equal(t, lcmArray[0], ownedDecoded, "caller-owned copy changed after advancing backend")
+}
+
+func TestBSBGetLedgerRawOrderingAndClose(t *testing.T) {
+	startLedger := uint32(3)
+	endLedger := uint32(5)
+	ctx := context.Background()
+	bsb := createBufferedStorageBackendForTesting()
+	mockDataStore := createMockdataStore(t, startLedger, endLedger, partitionSize, ledgerPerFileCount)
+	bsb.dataStore = mockDataStore
+
+	require.NoError(t, bsb.PrepareRange(ctx, BoundedRange(startLedger, endLedger)))
+	assert.Eventually(t, func() bool { return len(bsb.ledgerBuffer.ledgerQueue) == 3 }, time.Second*5, time.Millisecond*50)
+
+	_, err := bsb.GetLedgerRaw(ctx, startLedger+1)
+	require.ErrorContains(t, err, "next available ledger")
+
+	_, err = bsb.GetLedgerRaw(ctx, startLedger-1)
+	require.ErrorContains(t, err, "precedes current LedgerRange")
+
+	_, err = bsb.GetLedgerRaw(ctx, endLedger+1)
+	require.ErrorContains(t, err, "beyond current LedgerRange")
+
+	_, err = bsb.GetLedgerRaw(ctx, startLedger)
+	require.NoError(t, err)
+	_, err = bsb.GetLedgerRaw(ctx, startLedger+2)
+	require.ErrorContains(t, err, "next available ledger")
+
+	require.NoError(t, bsb.Close())
+	_, err = bsb.GetLedgerRaw(ctx, startLedger)
+	require.ErrorContains(t, err, "BufferedStorageBackend is closed")
+}

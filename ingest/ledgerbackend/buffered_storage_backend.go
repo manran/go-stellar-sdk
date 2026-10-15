@@ -389,3 +389,12 @@ func (bsb *BufferedStorageBackend) startPreparingRange(ledgerRange Range) (bool,
 
 	return false, nil
 }
+
+// GetLedgerRaw returns a borrowed raw LedgerCloseMeta XDR frame.
+// The returned slice is valid only until the next GetLedgerRaw/GetLedger call
+// or Close. Copy it before another read if it must outlive that read.
+func (bsb *BufferedStorageBackend) GetLedgerRaw(ctx context.Context, sequence uint32) ([]byte, error) {
+	bsb.bsBackendLock.RLock()
+	defer bsb.bsBackendLock.RUnlock()
+	return bsb.getLedgerRaw(ctx, sequence)
+}
