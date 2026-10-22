@@ -400,3 +400,11 @@ func (bsb *BufferedStorageBackend) startPreparingRange(ledgerRange Range) (bool,
 
 	return false, nil
 }
+
+// GetLedgerRaw returns a borrowed frame, valid until the next read or Close.
+// The caller must copy it before advancing the backend.
+func (bsb *BufferedStorageBackend) GetLedgerRaw(ctx context.Context, sequence uint32) ([]byte, error) {
+	bsb.bsBackendLock.RLock()
+	defer bsb.bsBackendLock.RUnlock()
+	return bsb.getLedgerRaw(ctx, sequence)
+}
